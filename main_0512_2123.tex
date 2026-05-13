@@ -16,8 +16,6 @@
 
 \titleformat{\section}{\normalfont\large\bfseries}{\thesection}{1em}{}
 \titlespacing{\section}{0pt}{8pt}{4pt}
-\titlespacing{\subsection}{0pt}{5pt}{1pt}
-\titlespacing{\subsubsection}{0pt}{3pt}{0pt}
 
 \begin{document}
 
@@ -28,10 +26,10 @@
 \noindent {\bf Cash funding needed:} \$42,450; \qquad
 {\bf AWS Promotional Credits needed:} \$50,000
 
-\noindent {\bf Amazon contacts:}
-% Dingyang Chen $\langle$dingerwa@amazon.com$\rangle$,
-Zhenyu Zhang $\langle$zhenyuzh@amazon.com$\rangle$,
-Özalp Özer $\langle$ozalpo@amazon.com$\rangle$
+\noindent {\bf Amazon contacts:}\\
+Dingyang Chen $\langle$dingerwa@amazon.com$\rangle$,
+Zhenyu Zhang $\langle$zhenyuzh@amazon.com$\rangle$,\\
+Özalp Özer $\langle$ozalpo@amazon.com$\rangle$.
 
 \noindent{\bf Abstract }
 Spatial symmetry is one of the most effective inductive biases for learning in robotics, but in real multi-robot deployments it almost never holds exactly. We argue that the failures come in two structurally distinct forms — local breakers, visible in the current state but confined to small regions (e.g., fixed obstacles), and latent breakers, hidden from observation but fixed across an episode (e.g., wind or gravity acting on the whole team). The two are not interchangeable: state-dependent gating cannot find a breaker it does not observe, and hidden-context inference attributes all violations to a single global variable. We propose a dual-view theory and a unified multi-robot architecture that address both. View 1 formalizes a locally factored partially symmetric Markov game and shows that the critic-level symmetry error at a safe pair is controlled by its discounted future breaker exposure, motivating a TD-learned per-agent gated critic. View 2 formalizes a latent symmetry-breaker POMDP, bounds value error by breaker-estimation error, and establishes posterior equivariance — constraining the encoder design. The unified architecture pairs an equivariant latent encoder with per-agent state-dependent gating, and is evaluated on multi-robot tasks isolating each view and combining them.
@@ -41,11 +39,11 @@ cooperative multi-robot RL, group equivariance, symmetry breaking
 
 
 \section{Introduction}
-% \paragraph{Symmetry in (multi-)robot learning.}
+\paragraph{Symmetry in (multi-)robot learning.}
 Group symmetries, geometric transformations that leave certain properties of a system invariant, provide one of the most effective inductive biases in robot learning.
 This is because the physical world is rich in geometric structure: a navigation controller should not depend on the absolute orientation of the world frame, and a pick-and-place skill executed at one workspace location should transfer to a rotated or translated configuration of the same objects.
-Encoding such structure directly into the learner reduces the effective hypothesis space and enables generalization from few samples, which has produced consistent gains in both imitation learning-based (e.g., \citep{zeng2021transporter,wang2024equivariantdiffusion,seo2025survey}) and reinforcement learning (RL)-based (e.g., \citep{vanderpol2020mdp,wang2022so2} and PI's \citep{luo2024reinforcement} by PI) robot learning, where exploration is expensive and high-quality demonstrations are scarce.
-To provide formality and prepare for theoretical grounding, we formalize symmetries in robot learning with the notion of group-symmetric Markov decision processes (MDPs)~\citep{vanderpol2020mdp,wang2022so2}:
+Encoding such structure directly into the learner reduces the effective hypothesis space and enables generalization from few samples, which has produced consistent gains in both imitation learning-based~\citep{} and reinforcement learning-based~\citep{} robot learning, where exploration is expensive and high-quality demonstrations are scarce.
+To provide formality and prepare for theoretical grounding, we formalize symmetries in robot learning with the notion of group-symmetric Markov decision processes (MDPs)~\citep{}:
 Given a group $G$ acting on the state space $\mathcal{S}$ and action space $\mathcal{A}$ of an MDP, the MDP is $G$-symmetric if the transition dynamics and reward function are invariant under the group actions, i.e., for every $g\in G$ and
 $(s,a,s')\in\mathcal{S}\times\mathcal{A}\times\mathcal{S}$,
 \begin{align} \label{eq:G-symmetric MDP}
@@ -53,11 +51,11 @@ P(g \cdot s' | g \cdot s, g \cdot a) = P(s' | s, a), \quad R(g \cdot s, g \cdot 
 \end{align}
 where $g \cdot$ denotes the group action on the state and action spaces.
 
-Although orginally developed for single-robot settings, the notion of group-symmetric MDPs can be extended to multi-robot settings by extending the group actions and invariance conditions in \eqref{eq:G-symmetric MDP} to the joint state, action, and observation spaces of all agents (PI's \citep{chen20243}).
+Although orginally developed for single-robot settings, the notion of group-symmetric MDPs can be extended to multi-robot settings by extending the group actions and invariance conditions in \eqref{eq:G-symmetric MDP} to the joint state, action, and observation spaces of all agents \cite{}.
 In multi-robot coordination, the relevant group typically factors as $G = G_{\text{spatial}} \times \mathcal{S}_n$, where $G_{\text{spatial}}$ captures Euclidean symmetries (i.e., translations and rotations) and $\mathcal{S}_n$ captures permutation symmetry over $n$ homogeneous agents.
 Commensurate with the time and resource constraints of this proposal, we will focus on the spatial symmetries in multi-robot coordination and leave permutation symmetry for future work. 
 
-% \paragraph{Multi-robot symmetry breakers: the local-latent dichotomy.}
+\paragraph{Multi-robot symmetry breakers: the local-latent dichotomy.}
 In practice, however, the symmetry condition in \eqref{eq:G-symmetric MDP} almost never holds exactly and globally in real-world multi-robot tasks.
 We observe that essentially every realistic violation falls into one of two structurally distinct modes, separated by a single diagnostic question:
 is the symmetry-breaking signal present in an agent's current observation, or hidden from it? 
@@ -77,8 +75,8 @@ state nor detectable from a single transition; they are latent variables that mu
 
 The two modes are structurally orthogonal and not interchangeable. A method for local symmetry breaking has nothing to offer when the breaker is hidden, whereas a latent-inference method, conversely, attributes all symmetry violations to a single global variable and cannot efficiently represent localized violations whose effects depend on which agent is nearby. Realistic multi-robot deployments almost always exhibit both modes simultaneously, and we aim for a complete treatment that addresses both.
 
-% \paragraph{Departure from prior works.}
-The focus of this proposal on the local-latent dichotomy separates it from prior works, which have either focused on single-agent settings where the dichotomy does not arise, or have taken a monolithic approach that globally relaxes the symmetry condition without distinguishing between structurally different modes of symmetry breaking (e.g., \citep{finzi2021rpp,wang2022approx,romero2022partial,vanderouderaa2022relaxing,hofgard2024relaxed,park2025approximate}).
+\paragraph{Departure from prior works.}
+The focus of this proposal on the local-latent dichotomy separates it from prior works, which have either focused on single-agent settings where the dichotomy does not arise~\citep{}, or have taken a monolithic approach that globally relaxes the symmetry condition without distinguishing between structurally different modes of symmetry breaking~\citep{}.
 Closing this gap is critical for the development of effective multi-robot learning algorithms and is the goal of this proposal.
 
 \section{Methods}
@@ -172,7 +170,7 @@ exposure is small.
 Equation~(4) motivates gating at the \textit{critic level} rather than at the
 representation level: the value-function statement is most directly
 implemented by mixing two critic outputs. Concretely, we instantiate
-\begin{itemize}[noitemsep,topsep=2pt]
+\begin{itemize}
   \item an \textit{orbit-averaged invariant critic}
     $Q^{\text{inv}}_\theta(s, a) = \tfrac{1}{|G|}\sum_{g \in G} f_\theta(g\!\cdot\!s, g\!\cdot\!a)$,
   \item an unconstrained \textit{raw critic} $Q^{\text{raw}}_\phi(s, a)$, and
@@ -275,7 +273,7 @@ in the same representation as $b$ (e.g., a 2D vector for a 2D wind direction).
 \subsubsection*{Algorithm: breaker-conditioned actor--critic}
 
 The architecture has three components:
-\begin{enumerate}[noitemsep,topsep=2pt]
+\begin{enumerate}
   \item \textit{Latent breaker encoder} $z_t = f_\eta(h_t)$, implemented as a recurrent
     network or a contrastive embedding. The encoder is designed so that
     $f_\eta(g \cdot h_t) = g \cdot f_\eta(h_t)$---i.e., its output lives in
@@ -405,7 +403,7 @@ claim of this proposal.
 
 We will evaluate across three task families, each chosen to isolate a
 different combination of the symmetry-breaking modes:
-\begin{enumerate}[noitemsep,topsep=2pt]
+\begin{enumerate}
   \item \textbf{Multi-robot navigation with fixed obstacles.} Cooperative
     goal-reaching on a 2D arena with a small number of fixed asymmetric
     obstacles. This isolates \textit{agent-wise local breakers} (View~1); a subset
@@ -451,7 +449,7 @@ Approximately \$10,000 will be directed toward AWS RoboMaker and Amazon SageMake
 The remaining $\sim$\$5,000 will cover supporting infrastructure costs such as data storage and transfer.
 
 
-\bibliographystyle{unsrtnat}
+\bibliographystyle{plainnat}
 \bibliography{references}
 
 \end{document}
