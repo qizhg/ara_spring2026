@@ -53,7 +53,7 @@ P(g \cdot s' | g \cdot s, g \cdot a) = P(s' | s, a), \quad R(g \cdot s, g \cdot 
 \end{align}
 where $g \cdot$ denotes the group action on the state and action spaces.
 
-Although orginally developed for single-robot settings, the notion of group-symmetric MDPs can be extended to multi-robot settings by extending the group actions and invariance conditions in \eqref{eq:G-symmetric MDP} to the joint state, action, and observation spaces of all agents (PI's \citep{chen20243}).
+Although originally developed for single-robot settings, the notion of group-symmetric MDPs can be extended to multi-robot settings by extending the group actions and invariance conditions in \eqref{eq:G-symmetric MDP} to the joint state, action, and observation spaces of all agents (PI's \citep{chen20243}).
 In multi-robot coordination, the relevant group typically factors as $G = G_{\text{spatial}} \times \mathcal{S}_n$, where $G_{\text{spatial}}$ captures Euclidean symmetries (i.e., translations and rotations) and $\mathcal{S}_n$ captures permutation symmetry over $n$ homogeneous agents.
 Commensurate with the time and resource constraints of this proposal, we will focus on the spatial symmetries in multi-robot coordination and leave permutation symmetry for future work. 
 
@@ -71,7 +71,7 @@ local state and localized to a small region of the per-agent state-action space.
 
 {\em Latent symmetry breaking}, on the other hand, occurs when the symmetry-breaking signal is hidden from the agent's current observation and can potentially be inferred from historical information.
 In this proposal, we focus on the common scenario where the symmetry-breaking signal is a latent global variable that is fixed within an episode but varies across episodes.
-As examples, consider a team of aerial drones operating in a constant wind field, a multi-arm setup mounted on an inclined surface, and a fleet of underwater robots in a steady current, where all share the same structural property: the underlying dynamics would be {\em exactly symmetric if} the wind, gravity, or current vector were rotated together with the state and action, yey these vectors are not directly observable.
+As examples, consider a team of aerial drones operating in a constant wind field, a multi-arm setup mounted on an inclined surface, and a fleet of underwater robots in a steady current, where all share the same structural property: the underlying dynamics would be {\em exactly symmetric if} the wind, gravity, or current vector were rotated together with the state and action, yet these vectors are not directly observable.
 Such symmetry breakers are neither localized in the visible
 state nor detectable from a single transition; they are latent variables that must be inferred from trajectory history.
 
