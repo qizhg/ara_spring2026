@@ -34,109 +34,39 @@ Zhenyu Zhang $\langle$zhenyuzh@amazon.com$\rangle$,
 Özalp Özer $\langle$ozalpo@amazon.com$\rangle$
 
 \noindent{\bf Abstract }
-Spatial symmetry is one of the most effective inductive biases for learning in robotics, but in real multi-robot deployments it almost never holds exactly. We argue that the failures come in two structurally distinct forms — local breakers, visible in the current state but confined to small regions (e.g., fixed obstacles), and latent breakers, hidden from observation but fixed across an episode (e.g., wind or gravity acting on the whole team). The two are not interchangeable: state-dependent gating cannot find a breaker it does not observe, and hidden-context inference attributes all violations to a single global variable. We propose a dual-view theory and a unified multi-robot architecture that address both. View 1 formalizes a locally factored partially symmetric Markov game and shows that the critic-level symmetry error at a safe pair is controlled by its discounted future breaker exposure, motivating a TD-learned per-agent gated critic. View 2 formalizes a latent symmetry-breaker POMDP, bounds value error by breaker-estimation error, and establishes posterior equivariance — constraining the encoder design. The unified architecture pairs an equivariant latent encoder with per-agent state-dependent gating, and is evaluated on multi-robot tasks isolating each view and combining them.
+Spatial symmetry is among the most effective inductive biases for robot learning, but in real multi-robot deployments it almost never holds exactly. Violations come in two structurally distinct forms: \emph{local} breakers, visible in the current state but confined to small regions (e.g., fixed obstacles), and \emph{latent} breakers, hidden from observation but fixed across an episode (e.g., wind or gravity). The two are orthogonal—state-dependent gating cannot find an unobserved breaker, and hidden-context inference cannot represent localized agent-dependent violations—yet realistic deployments exhibit both. We propose a dual-view theory and unified architecture. View~1 formalizes a locally factored partially symmetric Markov game and shows that critic-level symmetry error is controlled by discounted future breaker exposure, motivating a TD-learned per-agent gated critic. View~2 formalizes a latent symmetry-breaker POMDP and bounds value error by breaker-estimation error. The unified architecture pairs an equivariant latent encoder with per-agent gating.
 
 \noindent{\bf Keywords}
 cooperative multi-robot RL, group equivariance, symmetry breaking
 
 
 \section{Introduction}
-% \paragraph{Symmetry in (multi-)robot learning.}
-Group symmetries, geometric transformations that leave certain properties of a system invariant, provide one of the most effective inductive biases in robot learning.
-This is because the physical world is rich in geometric structure: a navigation controller should not depend on the absolute orientation of the world frame, and a pick-and-place skill executed at one workspace location should transfer to a rotated or translated configuration of the same objects.
-Encoding such structure directly into the learner reduces the effective hypothesis space and enables generalization from few samples, which has produced consistent gains in both imitation learning-based (e.g., \citep{zeng2021transporter,wang2024equivariantdiffusion,seo2025survey}) and reinforcement learning (RL)-based (e.g., \citep{vanderpol2020mdp,wang2022so2} and PI's \citep{luo2024reinforcement} by PI) robot learning, where exploration is expensive and high-quality demonstrations are scarce.
-To provide formality and prepare for theoretical grounding, we formalize symmetries in robot learning with the notion of group-symmetric Markov decision processes (MDPs)~\citep{vanderpol2020mdp,wang2022so2}:
-Given a group $G$ acting on the state space $\mathcal{S}$ and action space $\mathcal{A}$ of an MDP, the MDP is $G$-symmetric if the transition dynamics and reward function are invariant under the group actions, i.e., for every $g\in G$ and
-$(s,a,s')\in\mathcal{S}\times\mathcal{A}\times\mathcal{S}$,
+Group symmetries—geometric transformations leaving system properties invariant—provide one of the most effective inductive biases in robot learning, with consistent gains in imitation learning~\citep{zeng2021transporter,wang2024equivariantdiffusion,seo2025survey} and reinforcement learning (RL)~\citep{vanderpol2020mdp,wang2022so2,luo2024reinforcement}, where exploration is expensive and demonstrations are scarce.
+Formally, given a group $G$ acting on the state space $\mathcal{S}$ and action space $\mathcal{A}$ of an MDP, the MDP is $G$-symmetric if for every $g\in G$,
 \begin{align} \label{eq:G-symmetric MDP}
-P(g \cdot s' | g \cdot s, g \cdot a) = P(s' | s, a), \quad R(g \cdot s, g \cdot a) = R(s, a)
+P(g \cdot s' | g \cdot s, g \cdot a) = P(s' | s, a), \quad R(g \cdot s, g \cdot a) = R(s, a).
 \end{align}
-where $g \cdot$ denotes the group action on the state and action spaces.
+The notion extends to multi-robot settings by lifting actions and invariance to joint spaces (PI's~\citep{chen20243}), where the relevant group factors as $G = G_{\text{spatial}} \times \mathcal{S}_n$. We focus on the spatial component and leave permutation symmetry for future work.
 
-Although originally developed for single-robot settings, the notion of group-symmetric MDPs can be extended to multi-robot settings by extending the group actions and invariance conditions in \eqref{eq:G-symmetric MDP} to the joint state, action, and observation spaces of all agents (PI's \citep{chen20243}).
-In multi-robot coordination, the relevant group typically factors as $G = G_{\text{spatial}} \times \mathcal{S}_n$, where $G_{\text{spatial}}$ captures Euclidean symmetries (i.e., translations and rotations) and $\mathcal{S}_n$ captures permutation symmetry over $n$ homogeneous agents.
-Commensurate with the time and resource constraints of this proposal, we will focus on the spatial symmetries in multi-robot coordination and leave permutation symmetry for future work. 
+In practice, condition~\eqref{eq:G-symmetric MDP} almost never holds exactly. We observe that violations fall into two structurally distinct modes, separated by a single diagnostic: \emph{is the breaker present in an agent's current observation, or hidden from it?} \emph{Local} breakers are observable and confined to small regions of the per-agent state-action space—e.g., for warehouse robots near a fixed shelving unit, symmetry breaks only in the unit's vicinity, and at any moment only a subset of agents is affected. \emph{Latent} breakers are hidden global variables fixed within an episode—e.g., wind on aerial drones, gravity on inclined multi-arm setups, current on underwater robots—where dynamics would be exactly symmetric \emph{if} the vector were rotated together with state and action, yet the vector is not directly observable.
 
-% \paragraph{Multi-robot symmetry breakers: the local-latent dichotomy.}
-In practice, however, the symmetry condition in \eqref{eq:G-symmetric MDP} almost never holds exactly and globally in real-world multi-robot tasks.
-We observe that essentially every realistic violation falls into one of two structurally distinct modes, separated by a single diagnostic question:
-is the symmetry-breaking signal present in an agent's current observation, or hidden from it? 
-This {\em local-latent} dichotomy is the organizing principle of this proposal, and the two modes call for fundamentally different mechanisms:
-
-{\em Local symmetry breaking} occurs when the symmetry-breaking signal is present in an agent's current observation.
-This often happens in workspaces that contain fixed obstacles, walls, charging docks, asymmetric goal regions, etc. 
-For example, for a team of warehouse robots navigating around a fixed shelving unit, 2D Euclidean symmetry is broken only in the immediate vicinity of the obstacle, whereas far from it, rotations and translations of the joint configuration leave the optimal team behavior invariant.
-Crucially, in a typical configuration only a {\em subset} of the agents is actually near the obstacle at any given moment; the rest continue to operate in regions where rotational symmetry is exact. The breaker here is observable in the current
-local state and localized to a small region of the per-agent state-action space.
-
-{\em Latent symmetry breaking}, on the other hand, occurs when the symmetry-breaking signal is hidden from the agent's current observation and can potentially be inferred from historical information.
-In this proposal, we focus on the common scenario where the symmetry-breaking signal is a latent global variable that is fixed within an episode but varies across episodes.
-As examples, consider a team of aerial drones operating in a constant wind field, a multi-arm setup mounted on an inclined surface, and a fleet of underwater robots in a steady current, where all share the same structural property: the underlying dynamics would be {\em exactly symmetric if} the wind, gravity, or current vector were rotated together with the state and action, yet these vectors are not directly observable.
-Such symmetry breakers are neither localized in the visible
-state nor detectable from a single transition; they are latent variables that must be inferred from trajectory history.
-
-The two modes are structurally orthogonal and not interchangeable. A method for local symmetry breaking has nothing to offer when the breaker is hidden, whereas a latent-inference method, conversely, attributes all symmetry violations to a single global variable and cannot efficiently represent localized violations whose effects depend on which agent is nearby. Realistic multi-robot deployments almost always exhibit both modes simultaneously, and we aim for a complete treatment that addresses both.
-
-% \paragraph{Departure from prior works.}
-The focus of this proposal on the local-latent dichotomy separates it from prior works, which have either focused on single-agent settings where the dichotomy does not arise, or have taken a monolithic approach that globally relaxes the symmetry condition without distinguishing between structurally different modes of symmetry breaking (e.g., \citep{finzi2021rpp,wang2022approx,romero2022partial,vanderouderaa2022relaxing,hofgard2024relaxed,park2025approximate}).
-Closing this gap is critical for the development of effective multi-robot learning algorithms and is the goal of this proposal.
+The two modes are structurally orthogonal: local methods cannot detect hidden breakers; latent inference cannot represent agent-dependent localized violations. Realistic deployments exhibit both. This \emph{local--latent} dichotomy separates our proposal from prior work, which either treats single-agent settings where the dichotomy does not arise or globally relaxes symmetry without distinguishing structurally different modes~\citep{finzi2021rpp,wang2022approx,romero2022partial,vanderouderaa2022relaxing,hofgard2024relaxed,park2025approximate}. Closing this gap is the goal of this proposal.
 
 \section{Methods}
-We pursue two complementary views of spatial symmetry-breaking in multi-robot
-systems. \textit{View~1} (\S\,2.2) develops the multi-agent theory of agent-wise local
-breakers---when symmetry holds piecewise in each local factor---and yields a
-gated critic that routes equivariant and raw branches based on a learned
-state-dependent signal. \textit{View~2} (\S\,2.3) treats global hidden context (wind,
-gravity, current) as a latent symmetry breaker and recovers equivariance in
-the \textit{augmented} state through breaker inference. The two views are not
-mutually exclusive: they correspond to different sources of symmetry violation
-and can be combined within a single agent architecture (\S\,2.4).
+We consider a discounted cooperative Markov game $\mathcal{M} = \langle \mathcal{N}, \mathcal{S}, \mathcal{A}, P, r, \gamma\rangle$ with agent set $\mathcal{N} = \{1, \dots, N\}$, joint action space $\mathcal{A} = \mathcal{A}^1 \times \cdots \times \mathcal{A}^N$, and a spatial group $G$ lifted to each agent's state and action via group actions $(L_g^i, K_g^i)\colon \mathcal{X}^i \times \mathcal{A}^i \to \mathcal{X}^i \times \mathcal{A}^i$. We pursue two complementary views of why $G$ may fail to be exact: \emph{View~1} attributes failures to localized regions of the observed local state-action space, motivating a state-dependent gated critic; \emph{View~2} attributes them to an unobserved global breaker variable (wind, gravity, current) and recovers equivariance in the augmented state through breaker inference. The two are combined in a single architecture.
 
-\subsection*{Setting}
-
-We consider a discounted cooperative Markov game
-$\mathcal{M} = \langle \mathcal{N}, \mathcal{S}, \mathcal{A}, P, r, \gamma\rangle$
-with agent set $\mathcal{N} = \{1, \dots, N\}$ and joint action space
-$\mathcal{A} = \mathcal{A}^1 \times \cdots \times \mathcal{A}^N$. Both views
-assume a spatial group $G$ acting on the workspace, lifted to each agent's
-state and action via representations
-$(L_g^i, K_g^i)\colon \mathcal{X}^i \times \mathcal{A}^i \to \mathcal{X}^i \times \mathcal{A}^i$.
-The two views differ in \textit{why} the symmetry $G$ may fail to be exact: View~1
-attributes failures to localized regions in the observed local state--action
-space; View~2 attributes failures to an unobserved global breaker variable.
-
-\subsection*{View~1 --- Agent-wise local routing for partially symmetric Markov games}
-
-\subsubsection*{Formal model}
-
+\subsection{View~1: symmetry breakers as locally observed state-action regions}
 We posit a \textit{locally factored partially symmetric Markov game} in which the
 joint state, reward, and transition decompose agent-wise:
-\begin{equation}
-\mathcal{S} = \mathcal{X}^1 \times \cdots \times \mathcal{X}^N, \qquad
-r(s,a) = \sum_{i=1}^N r_i(x^i, a^i), \qquad
-P(\cdot \mid s, a) = \bigotimes_{i=1}^N P_i(\cdot \mid x^i, a^i). \tag{2}
-\end{equation}
-Each local factor carries its own finite symmetry group $G_i$ acting on
-$(\mathcal{X}^i, \mathcal{A}^i)$ and its own \textit{local breaker region}
-$\mathcal{B}^i \subseteq \mathcal{X}^i \times \mathcal{A}^i$. On the safe set
-$(x^i, a^i) \notin \mathcal{B}^i$ the local reward and transition are
-$G_i$-invariant; on $\mathcal{B}^i$ they may be arbitrary. The breaker region
-is itself $G_i$-invariant, so the safe/broken designation is a property of the
-orbit, not of a representative element.
+$
+\mathcal{S} = \mathcal{X}^1 \times \cdots \times \mathcal{X}^N,
+r(s,a) = \sum_{i=1}^N r_i(x^i, a^i),
+P(\cdot \mid s, a) = \bigotimes_{i=1}^N P_i(\cdot \mid x^i, a^i)
+$.
+Each local factor carries its own finite symmetry group $G_i$ acting on $(\mathcal{X}^i, \mathcal{A}^i)$ and its own \textit{local breaker region} $\mathcal{B}^i \subseteq \mathcal{X}^i \times \mathcal{A}^i$. On the safe set $(x^i, a^i) \notin \mathcal{B}^i$ the local reward and transition are $G_i$-invariant; on $\mathcal{B}^i$ they may be arbitrary. The breaker region is itself $G_i$-invariant, so the safe/broken designation is a property of the orbit. This is more general than a single global gate over the joint state: symmetry can be exploited at agents whose local context is symmetric even when others' are not.
 
-This formalism is more general than a single global gate over the joint state.
-It allows symmetry to be exploited at agents whose local context is symmetric,
-even when other agents' local contexts are not---recovering the multi-robot
-nuance flagged in \S\,1.3(a).
-
-\subsubsection*{Theoretical claims}
-
-We pursue two theoretical results that, together, justify a gated critic
-architecture.
-
-\textbf{Claim T1 (one-step model exactness).} Define a routed model that, on each
-factor, uses the group-averaged reward and transition on the safe set and the
-raw local reward and transition on the breaker region:
+\noindent{\bf Theory.}
+We will establish two results. First, define a \emph{routed model} that, on each factor, uses the group-averaged reward and transition on the safe set and the raw versions on the breaker region:
 \begin{equation}
 \begin{split}
 \widetilde{r}_i(x^i, a^i) &:= (1-\lambda^i_{\text{cur}})\,\overline{r}_i(x^i, a^i) + \lambda^i_{\text{cur}}\,r_i(x^i, a^i),\\
@@ -144,311 +74,59 @@ raw local reward and transition on the breaker region:
 \end{split}
 \tag{3}
 \end{equation}
-with $\lambda^i_{\text{cur}}(x^i, a^i) := \mathbf{1}\{(x^i, a^i) \in \mathcal{B}^i\}$
-and $\overline{r}_i, \overline{P}_i$ the $G_i$-orbit averages. We will show
-that the routed Bellman operator $\widetilde{\mathcal{T}}$ coincides with the
-true $\mathcal{T}$, so $\widetilde{Q}^\ast = Q^\ast$. This establishes that
-oracle agent-wise local routing is \textit{exact at the one-step model level} and
-isolates where the difficulty actually lies.
+with $\lambda^i_{\text{cur}}(x^i, a^i) := \mathbf{1}\{(x^i, a^i) \in \mathcal{B}^i\}$ and $\overline{r}_i, \overline{P}_i$ the $G_i$-orbit averages. We will show the routed Bellman operator $\widetilde{\mathcal{T}}$ coincides with the true $\mathcal{T}$, so $\widetilde{Q}^\ast = Q^\ast$: oracle agent-wise routing is exact at the one-step model level.
 
-\textbf{Claim T2 (future breaker exposure controls critic symmetry error).}
-One-step model symmetry does \textit{not} imply critic symmetry, because the critic
-sums discounted future rewards along trajectories that may eventually enter
-breaker regions. We will prove that for a safe-equivariant local policy
-$\pi_i$ and any safe pair $(x, a) \notin \mathcal{B}^i$,
+One-step model symmetry does \emph{not} imply critic symmetry, because the critic accumulates discounted future rewards along trajectories that may enter breaker regions. We will prove that for a safe-equivariant local policy $\pi_i$ and any safe pair $(x, a) \notin \mathcal{B}^i$,
 \begin{equation}
 \bigl|\,Q^{\pi_i}_i(L^i_g[x], K^i_g[a]) - Q^{\pi_i}_i(x,a)\,\bigr|
 \;\le\; 2\,V_{i,\max}\,\beta^{\pi_i}_i(x,a), \tag{4}
 \end{equation}
-where $\beta^{\pi_i}_i(x,a) := \mathbb{E}^{\pi_i}_{x,a}[\gamma^{\tau_i}]$ is
-the \textit{discounted future breaker exposure} and $\tau_i$ is the first future
-hitting time of $\mathcal{B}^i$. A finite-horizon variant replaces $\beta$
-with $\eta^{\pi_i}_{i,H}(x,a) + \gamma^{H+1}$. The implication is that
-symmetry bias on the critic is \textit{low-error} exactly where future breaker
-exposure is small.
+where $\beta^{\pi_i}_i(x,a) := \mathbb{E}^{\pi_i}_{x,a}[\gamma^{\tau_i}]$ is the \emph{discounted future breaker exposure} and $\tau_i$ is the first hitting time of $\mathcal{B}^i$. A finite-horizon variant replaces $\beta$ with $\eta^{\pi_i}_{i,H}(x,a) + \gamma^{H+1}$. Symmetry bias on the critic is low exactly where future breaker exposure is small.
 
-\subsubsection*{Algorithm: TD-learned gated critic}
+\noindent{\bf Algorithm: TD-learned gated critic.}
+The future-exposure bound motivates gating at the \emph{critic level} by mixing two outputs: an orbit-averaged invariant critic $Q^{\text{inv}}_\theta(s, a) = \tfrac{1}{|G|}\sum_{g \in G} f_\theta(g\!\cdot\!s, g\!\cdot\!a)$, an unconstrained raw critic $Q^{\text{raw}}_\phi(s, a)$, and a learned gate $\widehat{\lambda}_\psi(s,a) = \sigma(g_\psi(s,a)) \in [0,1]$, combined as $Q^{\text{gate}}_{\theta,\phi,\psi}(s,a) = (1-\widehat{\lambda}_\psi)\,Q^{\text{inv}}_\theta + \widehat{\lambda}_\psi\,Q^{\text{raw}}_\phi$. A local-factor variant sums per-agent gated branches, matching the future-exposure bound more directly.
+The gate is trained \emph{purely} via TD loss—no auxiliary supervision on breaker labels. The gradient $\partial Q^{\text{gate}}/\partial \widehat{\lambda}_\psi = Q^{\text{raw}}_\phi - Q^{\text{inv}}_\theta$ provides the routing signal: when the raw branch reduces TD error more than the invariant branch, the gate opens; when they agree, it favors the data-efficient invariant branch. We implement this within a CTDE actor-critic with decentralized actors $a^i = \mu_i(o^i)$ and a centralized gated critic.
 
-Equation~(4) motivates gating at the \textit{critic level} rather than at the
-representation level: the value-function statement is most directly
-implemented by mixing two critic outputs. Concretely, we instantiate
-\begin{itemize}[noitemsep,topsep=2pt]
-  \item an \textit{orbit-averaged invariant critic}
-    $Q^{\text{inv}}_\theta(s, a) = \tfrac{1}{|G|}\sum_{g \in G} f_\theta(g\!\cdot\!s, g\!\cdot\!a)$,
-  \item an unconstrained \textit{raw critic} $Q^{\text{raw}}_\phi(s, a)$, and
-  \item a learned gate
-    $\widehat{\lambda}_\psi(s,a) = \sigma(g_\psi(s,a)) \in [0,1]$,
-\end{itemize}
-combined as
-$Q^{\text{gate}}_{\theta,\phi,\psi}(s,a) =
-(1-\widehat{\lambda}_\psi)\,Q^{\text{inv}}_\theta + \widehat{\lambda}_\psi\,Q^{\text{raw}}_\phi.$
-A \textit{local-factor variant} sums per-agent gated branches and matches the
-hypotheses of Claim~T2 more directly.
-
-Critically, the gate is trained \textit{purely} through the TD loss---no auxiliary
-supervision on breaker labels. The gradient
-$\partial Q^{\text{gate}}/\partial \widehat{\lambda}_\psi
-= Q^{\text{raw}}_\phi - Q^{\text{inv}}_\theta$
-provides the routing signal: when the raw branch reduces TD error more than
-the invariant branch at $(s,a)$, the gate opens; when the two branches agree,
-the gate is free to favor the more data-efficient invariant branch. We
-implement this within a CTDE actor--critic with decentralized actors
-$a^i = \mu_i(o^i)$ and a centralized gated critic.
-
-\subsubsection*{Baselines and ablations}
-
-The empirical evaluation includes (i)~a raw MLP critic, (ii)~a fully invariant
-critic, (iii)~a \textit{current-breaker oracle gate} using ground-truth
-$\mathbf{1}\{(s,a) \in \mathcal{B}\}$---a diagnostic that tests whether
-\textit{current} breaker information alone is sufficient---and (iv)~the TD-learned
-gated critic (the main method). Per the future-exposure theory, we expect
-(iii)~to be insufficient on tasks where trajectories cross breaker regions
-several steps into the future, while (iv)~recovers the right gating signal
-through TD bootstrapping.
-
-\subsection*{View~2 --- Symmetry breakers as partially observed latent state}
-
-\textbf{A note on notation.} Unlike View~1, the formalism in this subsection is
-written in single-agent-style notation $(s, a, o, b)$ rather than the
-agent-wise factorization $s = (x^1, \dots, x^N)$. This is deliberate: the
-symmetry-breaking mechanism studied here is \textit{global} rather than agent-wise.
-A hidden wind or gravity vector is a single latent variable shared by \textit{all}
-agents in the team and fixed for the entire episode, so the relevant
-structural object---augmented equivariance under simultaneous rotation of the
-state, action, and breaker---does not decompose factor-by-factor in the way
-View~1's local breaker regions do. Throughout \S\,2.3 we therefore use
-$(s, a, o)$ to denote the joint state, joint action, and joint observation of
-the team, with the understanding that each is composed of per-agent
-quantities $s = (x^1, \dots, x^N)$, $a = (a^1, \dots, a^N)$,
-$o = (o^1, \dots, o^N)$, and that the spatial group $G$ acts simultaneously on
-all agents' local frames. The breaker $b$ remains a single global object. The
-agent-wise factorization re-enters explicitly in \S\,2.4, where we combine
-View~1 and View~2 in a properly multi-agent architecture.
-
-\subsubsection*{Formal model}
-
-For hidden-context breakers (\S\,1.3(b)), the agent-wise local-region view does
-not fit: the breaker is fixed throughout the episode and never appears in the
-observation. We instead model the environment as a \textit{latent symmetry-breaker
-POMDP}
-$\mathcal{M} = \langle \mathcal{S}, \mathcal{A}, \mathcal{O}, \mathcal{B}, P_b, r_b, \Omega_b, \gamma, \mu_0, \rho_0\rangle$
-in which a hidden breaker $b \sim \rho_0$ is sampled at the start of each
-episode and held fixed. The agent receives observations $o_t \sim \Omega_b(\cdot \mid s_t)$
-and history $h_t = (o_0, a_0, r_0, \dots, o_t)$ but never sees $b$.
-
-The structural assumption is \textit{augmented equivariance}: for every $g \in G$,
+\subsection{View~2: symmetry breakers as partially observed latent state}
+For hidden-context breakers, the agent-wise local-region view does not fit: the breaker is a \emph{single global object} (e.g., a wind or gravity vector) shared by all agents and fixed across the episode. Throughout this subsection we therefore use single-agent-style notation $(s, a, o, b)$, with the understanding that joint quantities $s = (x^1,\dots,x^N)$, $a = (a^1,\dots,a^N)$, $o = (o^1,\dots,o^N)$ decompose per-agent and $G$ acts simultaneously on all agents' frames; agent-wise factorization returns in \S\,2.3. We model the environment as a \emph{latent symmetry-breaker POMDP} $\mathcal{M} = \langle \mathcal{S}, \mathcal{A}, \mathcal{O}, \mathcal{B}, P_b, r_b, \Omega_b, \gamma, \mu_0, \rho_0\rangle$ in which $b \sim \rho_0$ is sampled at the start of each episode and held fixed; the agent receives observations $o_t \sim \Omega_b(\cdot \mid s_t)$ and history $h_t$ but never sees $b$.
+The structural assumption is \emph{augmented equivariance}: for every $g \in G$,
 \begin{equation}
 r_{g\cdot b}(g\!\cdot\!s, g\!\cdot\!a) = r_b(s,a), \quad
 P_{g\cdot b}(g\!\cdot\!C \mid g\!\cdot\!s, g\!\cdot\!a) = P_b(C \mid s,a), \quad
 \Omega_{g\cdot b}(g\!\cdot\!D \mid g\!\cdot\!s) = \Omega_b(D \mid s). \tag{5}
 \end{equation}
-The system is symmetric \textit{if and only if} $b$ is transformed alongside $(s,a)$.
-Holding $b$ fixed while rotating $(s,a)$ therefore yields an incorrect
-comparison, and the visible state alone admits no group action consistent with
-the dynamics.
+The system is symmetric if and only if $b$ is transformed alongside $(s,a)$; the visible state alone admits no group action consistent with the dynamics.
 
-\subsubsection*{Theoretical claims}
+\noindent{\bf Theory.}
+We will establish three results. First, if the dynamics are non-trivial in $b$, any critic enforcing observation-only equivariance $Q(g\!\cdot\!o, g\!\cdot\!a) = Q(o,a)$ is inconsistent with the true Bellman targets at some $(o,a,g)$; the correct invariance is $Q(g\!\cdot\!o, g\!\cdot\!a, g\!\cdot\!z) = Q(o, a, z)$ where $z$ is a breaker-sufficient statistic of history. Second, under Lipschitz assumptions $|r_b - r_{b'}| \le L_r d_\mathcal{B}(b, b')$ and $\|P_b - P_{b'}\|_{\text{TV}} \le L_p d_\mathcal{B}(b, b')$, conditioning on an estimate $\widehat{b}$ rather than the true $b$ yields a fixed-point value error bounded by $\tfrac{L_r + \gamma V_{\max} L_p}{1-\gamma}\,d_\mathcal{B}(b, \widehat{b})$, motivating auxiliary objectives that drive $d_\mathcal{B}(b, \widehat{b})$ down. Third, under~(5) and an equivariant prior $\rho_0$, the Bayesian posterior over $b$ transforms equivariantly: $\beta^{g \cdot h_t}_t(g \cdot B) = \beta^{h_t}_t(B)$; the encoder $f_\eta$ should therefore be built so its output transforms in the same representation as $b$.
 
-\textbf{Claim T3 (no observation-only equivariance).} If the dynamics are
-non-trivial in $b$, then any critic that enforces
-$Q(g\!\cdot\!o, g\!\cdot\!a) = Q(o,a)$ on the observation alone is
-inconsistent with the true Bellman targets at some $(o, a, g)$. The correct
-invariance is $Q(g\!\cdot\!o, g\!\cdot\!a, g\!\cdot\!z) = Q(o, a, z)$
-where $z$ is a breaker-sufficient statistic of history.
+\noindent{\bf Algorithm: breaker-conditioned actor-critic.}
+The architecture has three components. A \emph{latent breaker encoder} $z_t = f_\eta(h_t)$ (recurrent or contrastive) is built so $f_\eta(g \cdot h_t) = g \cdot f_\eta(h_t)$, i.e., its output lives in the same representation as $b$. A \emph{breaker-conditioned policy and critic} are equivariant in the augmented pair $(o, z)$: $\pi_\theta(g\!\cdot\!a \mid g\!\cdot\!o, g\!\cdot\!z) = \pi_\theta(a \mid o, z)$ and $Q_\omega(g\!\cdot\!o, g\!\cdot\!a, g\!\cdot\!z) = Q_\omega(o,a,z)$. The encoder is trained with auxiliary objectives in addition to TD: a dynamics loss $\mathcal{L}_{\text{dyn}} = \mathbb{E}[\ell(D_\psi(o_t, a_t, z_t), o_{t+1})]$, a contrastive loss pulling same-episode representations together (and pushing across-episode pairs apart), and an optional supervised loss $\mathcal{L}_{\text{sup}} = \mathbb{E}[d_\mathcal{B}(f_\eta(h_t), b)^2]$ when simulator labels are available. We will explore three variants: a \emph{point-estimate} encoder producing $\widehat{b}_t \in \mathcal{B}$; a \emph{belief} representation outputting distributional parameters; and \emph{canonicalization}, rotating inputs into a frame aligned with $\widehat{b}_t$, applying a standard network, and rotating outputs back.
 
-\textbf{Claim T4 (value sensitivity to breaker-estimation error).} Under
-Lipschitz assumptions
-$|r_b - r_{b'}| \le L_r d_\mathcal{B}(b, b')$ and
-$\|P_b - P_{b'}\|_{\text{TV}} \le L_p d_\mathcal{B}(b, b')$,
-conditioning on an estimate $\widehat{b}$ instead of the true $b$ yields a
-fixed-point value error bounded by
-$\tfrac{L_r + \gamma V_{\max} L_p}{1-\gamma}\,d_\mathcal{B}(b, \widehat{b}).$
-This quantifies the benefit of better breaker inference and motivates
-auxiliary objectives that drive $d_\mathcal{B}(b, \widehat{b})$ down.
-
-\textbf{Claim T5 (equivariant belief update).} Under~(5) and an equivariant prior
-$\rho_0$, the Bayesian posterior over $b$ transforms equivariantly:
-$\beta^{g \cdot h_t}_t(g \cdot B) = \beta^{h_t}_t(B)$.
-The encoder $f_\eta$ should therefore be built so that its output transforms
-in the same representation as $b$ (e.g., a 2D vector for a 2D wind direction).
-
-\subsubsection*{Algorithm: breaker-conditioned actor--critic}
-
-The architecture has three components:
-\begin{enumerate}[noitemsep,topsep=2pt]
-  \item \textit{Latent breaker encoder} $z_t = f_\eta(h_t)$, implemented as a recurrent
-    network or a contrastive embedding. The encoder is designed so that
-    $f_\eta(g \cdot h_t) = g \cdot f_\eta(h_t)$---i.e., its output lives in
-    the same representation as $b$.
-
-  \item \textit{Breaker-conditioned policy and critic}, equivariant in the augmented
-    pair $(o, z)$:
-    \[
-      \pi_\theta(g\!\cdot\!a \mid g\!\cdot\!o, g\!\cdot\!z) = \pi_\theta(a \mid o, z),
-      \qquad
-      Q_\omega(g\!\cdot\!o, g\!\cdot\!a, g\!\cdot\!z) = Q_\omega(o,a,z).
-    \]
-
-  \item \textit{Auxiliary objectives} for the encoder, used in addition to the TD signal:
-    a dynamics prediction loss
-    $\mathcal{L}_{\text{dyn}} = \mathbb{E}[\ell(D_\psi(o_t, a_t, z_t), o_{t+1})]$,
-    a contrastive loss that pulls together representations from the same
-    episode (same $b$) and pushes apart those from different episodes, and an
-    optional supervised loss
-    $\mathcal{L}_{\text{sup}} = \mathbb{E}[d_\mathcal{B}(f_\eta(h_t), b)^2]$
-    when simulator labels are available.
-\end{enumerate}
-
-We will explore three implementation variants: a \textit{point-estimate} encoder
-producing $\widehat{b}_t \in \mathcal{B}$; a \textit{belief} representation
-outputting distributional parameters; and \textit{canonicalization}, in which the
-network rotates inputs into a frame aligned with $\widehat{b}_t$, applies a
-standard network, and rotates outputs back---turning latent inference into a
-learned coordinate gauge.
-
-\subsubsection*{Baselines and ablations}
-
-We compare against (i)~an MLP actor--critic with no symmetry prior; (ii)~a
-strict observation-only equivariant model; (iii)~an \textit{oracle}
-breaker-conditioned equivariant model that receives the true $b$, providing an
-upper bound; (iv)~a recurrent non-equivariant model that has access to history
-but no symmetry prior; and (v)~an \textit{observable-breaker ablation} that
-exposes $b$ in the observation, confirming that the latent variable is indeed
-the missing information.
-
-\subsection*{Unifying perspective and combined architecture}
-
-Although developed independently, the two views compose naturally because they
-operate at \textit{different granularities}. View~1 introduces a \textit{per-agent,
-state-dependent} mechanism: each local factor $(x^i, a^i)$ has its own breaker
-region $\mathcal{B}^i$ and its own gate $\widehat{\lambda}^i$. View~2
-introduces a \textit{global, per-episode} mechanism: a single latent breaker
-$b \in \mathcal{B}$ is shared by the whole team and inferred once from the
-joint trajectory history. The two mechanisms address orthogonal failure
-modes---localized obstacle interactions on one hand, hidden physical context on
-the other---and can be composed without conflict.
-
-\textbf{Multi-agent setting.} As in \S\,2.2, the joint state and action factor
-agent-wise: $s = (x^1, \dots, x^N)$ and $a = (a^1, \dots, a^N)$. As in \S\,2.3,
-the team operates under partial observability with joint observation
-$o_t = (o^1_t, \dots, o^N_t)$ and joint history
-$h_t = (o_0, a_0, r_0, \dots, o_t)$. A single hidden breaker $b \sim \rho_0$
-is sampled per episode and remains fixed; each agent $i$ also has its own
-local symmetry group $G_i$ and local breaker region
-$\mathcal{B}^i \subseteq \mathcal{X}^i \times \mathcal{A}^i$.
-
-\textbf{Global breaker inference.} A shared encoder $z_t = f_\eta(h_t)$ ingests the
-\textit{joint} history and produces a global breaker estimate that is broadcast to
-every agent. The encoder is built to satisfy the augmented-equivariance
-condition $f_\eta(g \cdot h_t) = g \cdot f_\eta(h_t)$---when the entire
-team's history is rotated, the inferred latent rotates with it. In a CTDE
-implementation, $f_\eta$ runs in the centralized critic and conditions all
-per-agent branches.
-
-\textbf{Per-agent gated, breaker-conditioned critic.} For each agent $i$, define a
-\textit{breaker-conditioned invariant branch}
+\subsection{Unifying perspective and combined architecture}
+The two views compose because they operate at \emph{different granularities}: View~1 is per-agent and state-dependent; View~2 is global and per-episode. Concretely, we replace View~1's orbit-averaged invariant branch with View~2's breaker-conditioned variant—conditioning on a shared encoder $z_t = f_\eta(h_t)$ broadcast to all agents—while keeping the per-agent gate. Each agent's critic becomes
 \begin{equation}
-q^{\text{inv}}_{i,\theta}(x^i, a^i, z_t)
-\;=\; \frac{1}{|G_i|}\sum_{g \in G_i} f_{i,\theta}\!\bigl(L^i_g[x^i],\,K^i_g[a^i],\,g \cdot z_t\bigr), \tag{6}
+Q_i(x^i, a^i, h_t) = \bigl(1 - \widehat{\lambda}^i_\psi(x^i, a^i)\bigr)\,q^{\text{inv}}_{i,\theta}(x^i, a^i, z_t) + \widehat{\lambda}^i_\psi(x^i, a^i)\,q^{\text{raw}}_{i,\phi}(x^i, a^i, h_t), \tag{6}
 \end{equation}
-which is equivariant in the \textit{augmented} per-agent triple $(x^i, a^i, z_t)$---
-the breaker estimate transforms together with the local state and action,
-following the augmented equivariance of View~2. Define a \textit{per-agent raw
-branch} $q^{\text{raw}}_{i,\phi}(x^i, a^i, h_t)$ that has access to the joint
-history and is otherwise unconstrained. Mix them with a per-agent gate
-$\widehat{\lambda}^i_\psi(x^i, a^i) \in [0,1]$ from View~1:
-\begin{align}
-Q_i(x^i, a^i, h_t)
-&= \bigl(1 - \widehat{\lambda}^i_\psi(x^i, a^i)\bigr)\,q^{\text{inv}}_{i,\theta}(x^i, a^i, z_t) \notag \\
-&\quad +\; \widehat{\lambda}^i_\psi(x^i, a^i)\,q^{\text{raw}}_{i,\phi}(x^i, a^i, h_t). \tag{7}
-\end{align}
-The total centralized critic is the agent-wise sum
-\begin{equation}
-Q(s, a, h_t) \;=\; \sum_{i=1}^N Q_i(x^i, a^i, h_t), \tag{8}
-\end{equation}
-matching the factored value structure of~(2). This factorization is what
-makes the local theoretical bound of Claim~T2 directly applicable to the
-combined model: each summand individually satisfies the per-agent
-future-exposure bound, conditioned on $z_t$.
+summed to $Q(s,a,h_t) = \sum_i Q_i$. Confirming that this combined architecture dominates both single-view variants on tasks mixing the two failure modes is a primary empirical claim.
 
-\textbf{Reading the two mechanisms.} The invariant branch~(6) is the one that
-carries the inductive bias from both views simultaneously. It exploits \textit{local}
-$G_i$-equivariance in agent~$i$'s frame, but only insofar as the global hidden
-context has been correctly inferred---captured by conditioning on $z_t$. The
-per-agent gate $\widehat{\lambda}^i_\psi$ allows agent~$i$ to fall back to its
-raw branch when its \textit{local} state--action pair lies in $\mathcal{B}^i$,
-regardless of how well the global breaker has been estimated. Conversely, a
-poor estimate $z_t$ does not corrupt agents whose gates are already
-open---those agents already route through $q^{\text{raw}}_{i,\phi}$. The two
-mechanisms therefore degrade gracefully and independently.
+\noindent{\bf Experimental design.}
+We evaluate across three task families, each isolating a different combination of failure modes. \emph{Multi-robot navigation with fixed obstacles} (cooperative goal-reaching on a 2D arena with a few fixed asymmetric obstacles) isolates agent-wise local breakers: at any timestep a subset of agents is near an obstacle while others are not; the group is $G = \mathrm{SO}(2)$ or a discrete subgroup, with symmetry-breaking strength varied by obstacle density. \emph{Hidden wind navigation} replaces the obstacles with a per-episode constant wind vector omitted from observations, isolating hidden global breakers; wind direction must be inferred from the discrepancy between commanded and realized displacement. Finally, \emph{combined regime} is multi-arm manipulation on an inclined surface (hidden gravity) with localized obstacles, testing the combined architecture (\S\,2.3) and the orthogonality claim.
+Metrics follow standard practice—final return, sample efficiency, training stability across seeds—plus view-specific diagnostics: gate activation maps and their correlation with oracle breaker labels (View~1), and angular error between $\widehat{b}_t$ and the true wind/gravity vector (View~2). Performance is reported as a function of symmetry-breaking strength to characterize the regime where each view, and the combined architecture, dominates.
 
-\textbf{Training.} The TD loss on the joint critic
-\[
-  L_Q = \mathbb{E}_\mathcal{D}\bigl[(Q(s_t, a_t, h_t) - y_t)^2\bigr]
-\]
-with $y_t = r_t + \gamma\,\overline{Q}(s_{t+1}, a'_{t+1}, h_{t+1})$
-propagates gradients to all three parameter groups: the equivariant branches
-$\{\theta\}$ and raw branches $\{\phi\}$, the per-agent gates $\{\psi\}$, and
-the encoder $\eta$. The encoder additionally receives gradients from the
-auxiliary objectives of \S\,2.3.3 (dynamics, contrastive, optional supervised).
-No gate-supervision loss is used; the routing decisions emerge from TD
-bootstrapping in the standard way.
+\textit{Baselines and ablations.} On View~1 we compare against a raw MLP critic, a fully invariant critic, and a \emph{current-breaker oracle gate} using ground-truth $\mathbf{1}\{(s,a) \in \mathcal{B}\}$—a diagnostic for whether current breaker information alone suffices (the future-exposure bound predicts it does not when trajectories cross breaker regions several steps ahead). On View~2: an unstructured MLP, a strict observation-only equivariant model, a recurrent non-equivariant model with history but no symmetry prior, an \emph{oracle} receiving the true $b$ (upper bound), and an \emph{observable-breaker ablation} exposing $b$ in the observation (confirming the latent variable is the missing information). We ultimately will compare the combined architecture against the strongest single-view variant from each.
 
-\textbf{Empirical claim.} We will evaluate~(7)--(8) against the single-view
-variants of \S\,2.2.3 and \S\,2.3.3, predicting that the combined architecture
-matches the better of the two single-view models on each task family and
-strictly dominates them on tasks that mix both failure modes (e.g., obstacles
-\textit{and} hidden wind). Confirming this orthogonality is a primary empirical
-claim of this proposal.
-
-\subsection*{Experimental design}
-
-We will evaluate across three task families, each chosen to isolate a
-different combination of the symmetry-breaking modes:
-\begin{enumerate}[noitemsep,topsep=2pt]
-  \item \textbf{Multi-robot navigation with fixed obstacles.} Cooperative
-    goal-reaching on a 2D arena with a small number of fixed asymmetric
-    obstacles. This isolates \textit{agent-wise local breakers} (View~1); a subset
-    of agents at any given timestep is near an obstacle while others are not.
-    Symmetry group $G = \mathrm{SO}(2)$ or a discrete subgroup.
-    Symmetry-breaking strength is swept by varying obstacle density.
-
-  \item \textbf{Hidden wind navigation.} Same as task~1 but with an
-    obstacle-free arena and a per-episode constant wind vector omitted from
-    observations. This isolates \textit{hidden global breakers} (View~2). The
-    wind direction must be inferred from the discrepancy between commanded
-    and realized displacement.
-
-  \item \textbf{Combined regime.} A multi-arm manipulation task on an inclined
-    surface (hidden gravity direction) with localized obstacles. This tests
-    the combined architecture (\S\,2.4) and the orthogonality claim.
-\end{enumerate}
-
-Metrics follow standard practice---final return, sample efficiency, training
-stability across seeds---supplemented by diagnostics specific to each view:
-gate activation maps and their correlation with oracle breaker labels (View~1)
-and angular error between $\widehat{b}_t$ and the true wind/gravity vector
-(View~2). Performance will be reported as a function of symmetry-breaking
-strength (obstacle density, wind magnitude) to characterize the regime where
-each view, and the combined architecture, dominates.
 
 \section{Expected Results}
-The table below shows a timeline for the key milestones of the project.
-\begin{figure}[h]
-\centering
-\includegraphics[scale=1.]{figures/timeline.pdf}
-\end{figure}
+The project spans 14 months. The first three months focus on setup and baseline implementation. View 1 theory and algorithms are developed in months 2–6, running in parallel with View 2 theory and algorithms in months 4–8. Unification of the two views begins in month 8 and continues through month 11. The final three months are dedicated to writing code, paper, and submission.
 
-
-\section{Funds Needed}
-\noindent{\em Cash funding.}
-Per PI's institution policy~\citep{wpi_stipend_rates}, \$42,450 is requested for the minimum annual stipend amount for a research assistant (RA).
-
-\noindent{\em AWS promotional credits.}
-We request \$50,000 in AWS promotional credits over a one-year period.
-The majority ($\sim$\$35,000) will be allocated to Amazon EC2 (P4d or G5 GPU instances alongside high-CPU instances) that will power parallelized (multi-robot) RL training. 
-Approximately \$10,000 will be directed toward AWS RoboMaker and Amazon SageMaker to enable realistic and large-scale robotics simulation, training, and benchmarking.
-The remaining $\sim$\$5,000 will cover supporting infrastructure costs such as data storage and transfer.
+\noindent{\bf Funds needed.}
+\noindent{\em Cash funding:} \$42,450 is requested for the annual stipend of a research assistant (RA)~\citep{wpi_stipend_rates}.
+\noindent{\em AWS promotional credits:}
+\$50,000 is requested.
+$\sim$\$35,000 will be allocated to EC2 for parallelized multi-robot RL training,
+$\sim$\$10,000 to RoboMaker and SageMaker to enable realistic and large-scale robotics simulation, training, and benchmarking,
+$\sim$\$5,000 to supporting infrastructure.
 
 
 \bibliographystyle{unsrtnat}
